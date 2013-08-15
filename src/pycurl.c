@@ -47,6 +47,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <limits.h>
+#include <arpa/inet.h>
 #include <curl/curl.h>
 #include <curl/easy.h>
 #include <curl/multi.h>
@@ -1288,6 +1289,41 @@ header_callback(char *ptr, size_t size, size_t nmemb, void *stream)
     return util_write_callback(1, ptr, size, nmemb, stream);
 }
 
+/* convert protocol address from C to python, returns a tuple of protocol
+   specific values */
+static PyObject *
+convert_protocol_address(struct sockaddr* saddr, unsigned int saddrlen)
+{
+    PyObject *resObj;
+    
+    switch (saddr->sa_family)
+    {
+    case AF_INET:
+        {
+            struct sockaddr_in* sin = (struct sockaddr_in*)saddr;
+            resObj = Py_BuildValue("(s#i)", &sin->sin_addr, sizeof(sin->sin_addr), ntohs(sin->sin_port));
+        }
+        break;
+    case AF_INET6:
+        {
+            struct sockaddr_in6* sin6 = (struct sockaddr_in6*)saddr;
+            resObj = Py_BuildValue("(s#i)", &sin6->sin6_addr, sizeof(sin6->sin6_addr), ntohs(sin6->sin6_port));
+        }
+        break;
+    default:
+        /* We only support IPv4/6 addresses.  Can curl even be used with
+           anything else? */
+	PyErr_SetString(ErrorObject, "Unsupported address family.");
+        resObj = NULL;
+    }
+    
+    if (resObj == NULL)
+        goto error;
+    
+error:
+    return resObj;
+}
+
 /* curl_socket_t is just an int on unix/windows (with limitations that
  * are not important here) */
 static curl_socket_t
@@ -1304,7 +1340,7 @@ opensocket_callback(void *clientp, curlsocktype purpose,
     self = (CurlObject *)clientp;
     PYCURL_ACQUIRE_THREAD();
     
-    arglist = Py_BuildValue("(iii)", address->family, address->socktype, address->protocol);
+    arglist = Py_BuildValue("(iiiN)", address->family, address->socktype, address->protocol, convert_protocol_address(&address->addr, address->addrlen));
     if (arglist == NULL)
         goto verbose_error;
 
